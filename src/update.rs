@@ -9,7 +9,7 @@ use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-const RELEASES_API: &str = "https://api.github.com/repos/brettchalupa/usagi/releases/latest";
+const RELEASES_API: &str = "https://api.github.com/repos/rlyrvra/usagi/releases/latest";
 
 /// Cap on the JSON body returned by the GitHub releases API. The
 /// real response is ~16 KB; 1 MiB is comfortable headroom and bounds
@@ -20,7 +20,7 @@ pub fn run() -> Result<()> {
     let target = Target::host().ok_or_else(|| {
         Error::Cli(format!(
             "no published binary for this platform ({} / {}). \
-             See https://github.com/brettchalupa/usagi/releases",
+             See https://github.com/rlyrvra/usagi/releases",
             std::env::consts::OS,
             std::env::consts::ARCH,
         ))

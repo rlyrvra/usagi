@@ -152,6 +152,24 @@ impl Bundle {
             bundle.insert("sprites.png", std::fs::read(&sprites)?);
         }
 
+        // Individual sprites under `sprites/<name>.png`. Mirrors the sfx/
+        // and shaders/ walks: flat directory, .png extension filter, keys
+        // stored as `sprites/<filename>` so BundleBacked::read_sprite and
+        // sprite_stems resolve them.
+        let sprites_dir = root.join("sprites");
+        if sprites_dir.is_dir() {
+            for entry in std::fs::read_dir(&sprites_dir)?.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|e| e.to_str()) != Some("png") {
+                    continue;
+                }
+                let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                bundle.insert(format!("sprites/{name}"), std::fs::read(&p)?);
+            }
+        }
+
         let palette = root.join("palette.png");
         if palette.is_file() {
             bundle.insert("palette.png", std::fs::read(&palette)?);
