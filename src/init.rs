@@ -65,7 +65,7 @@ pub(crate) fn template_files() -> Vec<TemplateFile> {
 
 /// Asset dirs created empty at init so new users know where sound and
 /// save files go. Harmless if unused; users can delete them.
-const ASSET_DIRS: &[&str] = &["sfx", "music", "data"];
+const ASSET_DIRS: &[&str] = &["sfx", "music", "data", "sprites"];
 
 /// Writes the bootstrap files into `path`. Skips files that already
 /// exist so re-running on an in-progress project never clobbers user

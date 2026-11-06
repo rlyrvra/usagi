@@ -254,6 +254,12 @@ gfx.get_px(x, y) -- read screen pixel: r, g, b, palette_index; expensive on web
 gfx.spr(index, x, y, alpha?)
 gfx.spr_ex(index, x, y, flip_x, flip_y, rotation, tint, alpha)
 gfx.get_spr_px(index, x, y) -- read sprite-sheet pixel: r, g, b, palette_index
+gfx.img(name, x, y, alpha)
+gfx.img_ex(name, x, y, flip_x, flip_y, rotation, tint, alpha)
+gfx.img_sspr(name, sx, sy, sw, sh, dx, dy, alpha)
+gfx.img_sspr_ex(name, sx, sy, sw, sh, dx, dy, dw, dh, flip_x, flip_y, rotation, tint, alpha)
+gfx.img_size(name)
+gfx.has_img(name)
 gfx.sspr(sx, sy, sw, sh, dx, dy, alpha?)
 gfx.sspr_ex(sx, sy, sw, sh, dx, dy, dw, dh, flip_x, flip_y, rotation, tint, alpha)
 gfx.shader_set(name)
@@ -1604,6 +1610,8 @@ out that work well with Usagi:
     Lua export
 
 ## Export
+
+DO THIS FIRST: `$env:USAGI_TEMPLATE_VERSION = "1.3.3"` - points to Brett's releases for exports.
 
 `usagi export <path>` packages a game for distribution. Default output is every
 platform plus a portable bundle:

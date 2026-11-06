@@ -115,6 +115,23 @@ pub fn read_sprite(snapshot: Option<&Pixels>, cell: i32, idx: i32, x: f32, y: f3
     }
 }
 
+/// `gfx.get_img_px(name, x, y)` body: samples a single pixel out of a
+/// loaded `sprites/<name>.png`. Returns all-nil for out-of-bounds or
+/// fully transparent pixels. Alpha-keyed the same way as
+/// `read_sprite`, since the engine's `gfx.img` path also treats alpha
+/// 0 as "no pixel here."
+pub fn read_image_px(pixels: Option<&Pixels>, x: f32, y: f32) -> LuaPixel {
+    let Some(pixels) = pixels else {
+        return NIL_PIXEL;
+    };
+    let xi = x.round() as i32;
+    let yi = y.round() as i32;
+    match pixels.get(xi, yi) {
+        Some(c) if c.a > 0 => color_to_lua(c),
+        _ => NIL_PIXEL,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

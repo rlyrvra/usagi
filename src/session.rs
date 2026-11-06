@@ -9,7 +9,7 @@
 
 use crate::api::{record_err, register_data_api, register_shader_api, setup_api, wrap};
 use crate::assets::{
-    MusicLibrary, SfxLibrary, SpriteSheet, clear_user_modules, install_require, load_script,
+    MusicLibrary, SfxLibrary, SpriteLibrary, SpriteSheet, clear_user_modules, install_require, load_script,
 };
 #[cfg(not(target_os = "emscripten"))]
 use crate::capture::{Recorder, save_screenshot};
@@ -564,6 +564,7 @@ fn register_save_api(lua: &Lua, game_id: crate::game_id::GameId) -> LuaResult<()
 /// control them explicitly to prevent against implicit change upstream.
 fn new_lua() -> Lua {
     let lua = unsafe { Lua::unsafe_new() };
+    #[cfg(not(feature = "luajit"))]
     lua.gc_inc(GC_PAUSE, GC_STEPMUL, GC_STEPSIZE);
     lua
 }
@@ -573,9 +574,13 @@ fn new_lua() -> Lua {
 /// Shared by `Session::new` and the hard-reset VM rebuild so the two can't
 /// drift apart.
 fn install_core_apis(lua: &Lua, dev: bool, vfs: &Rc<dyn VirtualFs>) -> crate::Result<()> {
+    eprintln!("core: setup_api");
     setup_api(lua, dev)?;
+    eprintln!("core: install_require");
     install_require(lua, vfs.clone())?;
+    eprintln!("core: register_data_api");
     register_data_api(lua, vfs.clone())?;
+    eprintln!("core: ok");
     Ok(())
 }
 
@@ -650,6 +655,7 @@ struct Session {
     // GPU resources: dropped first, while the GL context is still alive.
     rt: RenderTexture2D,
     sprites: SpriteSheet,
+    images: SpriteLibrary,
     /// Owns the active post-process `Shader` (a GPU resource) so its
     /// `Drop` (UnloadShader) runs while the GL context is still alive.
     /// Must come before `rl` for the same reason `rt` does.
@@ -1016,6 +1022,7 @@ impl Session {
         // makes the function callable from any callback (including
         // `_init`), not just from inside per-frame scopes.
         let sprites = SpriteSheet::load(&mut rl, &thread, vfs.as_ref());
+        let images = SpriteLibrary::load(&mut rl, &thread, vfs.as_ref());
         // Load the user's palette.png if present, otherwise stay on
         // the Pico-8 default. Errors fall back to default with a log;
         // we don't want a broken palette.png to refuse to start the
@@ -1121,6 +1128,7 @@ impl Session {
         Ok(Self {
             rt,
             sprites,
+            images,
             font,
             user_font,
             lua,
@@ -1459,6 +1467,12 @@ impl Session {
             .reload_if_changed(&mut self.rl, &self.thread, self.vfs.as_ref())
         {
             crate::msg::info!("reloaded sprites.png");
+        }
+        if self
+            .images
+            .reload_if_changed(&mut self.rl, &self.thread, self.vfs.as_ref())
+        {
+            crate::msg::info!("reloaded sprites/ ({} image(s))", self.images.len());
         }
 
         let new_palette_mtime = self.vfs.palette_mtime();
@@ -1801,8 +1815,10 @@ impl Session {
             screen_pixels,
             screen_px_used,
             sprites,
+            images,
             ..
         } = self;
+        let images_ref: &crate::assets::SpriteLibrary = images; 
         let Some(update_fn) = update.as_ref() else {
             return;
         };
@@ -1883,6 +1899,32 @@ impl Session {
                         &["number", "number", "number"],
                     )?,
                 )?;
+                let img_size = scope.create_function(|_, name: LuaString| {
+                let name = name.to_string_lossy();
+                    match images_ref.get(&name) {
+                        Some(asset) => Ok((Some(asset.width()), Some(asset.height()))),
+                        None => Ok((None, None)),
+                    }
+                })?;
+                gfx_tbl.set("img_size", wrap(lua, img_size, "gfx.img_size", &["string"])?)?;
+
+                let has_img = scope.create_function(|_, name: LuaString| {
+                    Ok(images_ref.contains(&name.to_string_lossy()))
+                })?;
+                gfx_tbl.set("has_img", wrap(lua, has_img, "gfx.has_img", &["string"])?)?;
+                let img_size = scope.create_function(|_, name: LuaString| {
+                let name = name.to_string_lossy();
+                    match images_ref.get(&name) {
+                        Some(asset) => Ok((Some(asset.texture.width), Some(asset.texture.height))),
+                        None => Ok((None, None)),
+                    }
+                })?;
+                gfx_tbl.set("img_size", wrap(lua, img_size, "gfx.img_size", &["string"])?)?;
+
+                let has_img = scope.create_function(|_, name: LuaString| {
+                    Ok(images_ref.contains(&name.to_string_lossy()))
+                })?;
+                gfx_tbl.set("has_img", wrap(lua, has_img, "gfx.has_img", &["string"])?)?;
 
                 update_fn.call::<()>(dt)?;
                 Ok(())
@@ -1901,6 +1943,7 @@ impl Session {
             rt,
             sfx,
             sprites,
+            images,
             screen_pixels,
             font,
             user_font,
@@ -1911,6 +1954,7 @@ impl Session {
             screen_px_used,
             ..
         } = self;
+        let images_ref: &crate::assets::SpriteLibrary = images;
         let mut d_rt = rl.begin_texture_mode(thread, rt);
         // Keep the RT alpha opaque while drawing into it so alpha values work correctly.
         begin_rt_blend();
@@ -2361,6 +2405,181 @@ impl Session {
                             Ok(())
                         },
                     )?;
+
+                    let img = scope.create_function(
+                        |_, (name, x, y, a): (LuaString, f32, f32, Option<f32>)| {
+                            let name = name.to_string_lossy();
+                            if let Some(asset) = images_ref.get(&name) {
+                                let source = Rectangle {
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: asset.texture.width as f32,
+                                    height: asset.texture.height as f32,
+                                };
+                                d_rt_cell.borrow_mut().draw_texture_rec(
+                                    &asset.texture,
+                                    source,
+                                    Vector2::new(x.round(), y.round()),
+                                    shape_color(0, a),
+                                );
+                            }
+                            Ok(())
+                        },
+                    )?;
+
+                    let img_ex = scope.create_function(
+                        |_,
+                        (name, x, y, flip_x, flip_y, rotation, tint_idx, alpha): (
+                            LuaString,
+                            f32,
+                            f32,
+                            bool,
+                            bool,
+                            f32,
+                            i32,
+                            f32,
+                        )| {
+                            let name = name.to_string_lossy();
+                            if let Some(asset) = images_ref.get(&name) {
+                                let w = asset.texture.width as f32;
+                                let h = asset.texture.height as f32;
+                                let sw = if flip_x { -w } else { w };
+                                let sh = if flip_y { -h } else { h };
+                                let source = Rectangle { x: 0.0, y: 0.0, width: sw, height: sh };
+                                let half_w = w / 2.0;
+                                let half_h = h / 2.0;
+                                let dest = Rectangle {
+                                    x: x.round() + half_w,
+                                    y: y.round() + half_h,
+                                    width: w,
+                                    height: h,
+                                };
+                                let origin = Vector2::new(half_w, half_h);
+                                d_rt_cell.borrow_mut().draw_texture_pro(
+                                    &asset.texture,
+                                    source,
+                                    dest,
+                                    origin,
+                                    rotation.to_degrees(),
+                                    tinted(tint_idx, alpha),
+                                );
+                            }
+                            Ok(())
+                        },
+                    )?;
+
+                    let img_sspr = scope.create_function(
+                        |_,
+                        (name, sx, sy, sw, sh, dx, dy, a): (
+                            LuaString,
+                            f32,
+                            f32,
+                            f32,
+                            f32,
+                            f32,
+                            f32,
+                            Option<f32>,
+                        )| {
+                            let name = name.to_string_lossy();
+                            if let Some(asset) = images_ref.get(&name) {
+                                let source = Rectangle { x: sx, y: sy, width: sw, height: sh };
+                                d_rt_cell.borrow_mut().draw_texture_rec(
+                                    &asset.texture,
+                                    source,
+                                    Vector2::new(dx.round(), dy.round()),
+                                    shape_color(0, a),
+                                );
+                            }
+                            Ok(())
+                        },
+                    )?;
+
+                    type ImgSsprExArgs = (
+                        LuaString,
+                        f32, f32, f32, f32, // sx, sy, sw, sh
+                        f32, f32, f32, f32, // dx, dy, dw, dh
+                        bool, bool,         // flip_x, flip_y
+                        f32,                // rotation (radians)
+                        i32,                // tint_idx
+                        f32,                // alpha
+                    );
+
+                    let img_sspr_ex = scope.create_function(
+                        |_,
+                        (name, sx, sy, sw, sh, dx, dy, dw, dh, flip_x, flip_y, rotation, tint_idx, alpha):
+                            ImgSsprExArgs| {
+                            let name = name.to_string_lossy();
+                            if let Some(asset) = images_ref.get(&name) {
+                                let src_w = if flip_x { -sw } else { sw };
+                                let src_h = if flip_y { -sh } else { sh };
+                                let source = Rectangle { x: sx, y: sy, width: src_w, height: src_h };
+                                let half_w = dw / 2.0;
+                                let half_h = dh / 2.0;
+                                let dest = Rectangle {
+                                    x: dx.round() + half_w,
+                                    y: dy.round() + half_h,
+                                    width: dw,
+                                    height: dh,
+                                };
+                                let origin = Vector2::new(half_w, half_h);
+                                d_rt_cell.borrow_mut().draw_texture_pro(
+                                    &asset.texture,
+                                    source,
+                                    dest,
+                                    origin,
+                                    rotation.to_degrees(),
+                                    tinted(tint_idx, alpha),
+                                );
+                            }
+                            Ok(())
+                        },
+                    )?;
+
+                    let img_size = scope.create_function(|_, name: LuaString| {
+                        let name = name.to_string_lossy();
+                        match images_ref.get(&name) {
+                            Some(asset) => Ok((Some(asset.texture.width), Some(asset.texture.height))),
+                            None => Ok((None, None)),
+                        }
+                    })?;
+
+                    let has_img = scope.create_function(|_, name: LuaString| {
+                        Ok(images_ref.contains(&name.to_string_lossy()))
+                    })?;
+
+                    gfx_tbl.set("img", wrap(lua, img, "gfx.img", &["string", "number", "number"])?)?;
+                    gfx_tbl.set(
+                        "img_ex",
+                        wrap(
+                            lua,
+                            img_ex,
+                            "gfx.img_ex",
+                            &["string", "number", "number", "boolean", "boolean", "number", "number", "number"],
+                        )?,
+                    )?;
+                    gfx_tbl.set(
+                        "img_sspr",
+                        wrap(
+                            lua,
+                            img_sspr,
+                            "gfx.img_sspr",
+                            &["string", "number", "number", "number", "number", "number", "number"],
+                        )?,
+                    )?;
+                    gfx_tbl.set(
+                        "img_sspr_ex",
+                        wrap(
+                            lua,
+                            img_sspr_ex,
+                            "gfx.img_sspr_ex",
+                            &[
+                                "string", "number", "number", "number", "number", "number", "number",
+                                "number", "number", "boolean", "boolean", "number", "number", "number",
+                            ],
+                        )?,
+                    )?;
+                    gfx_tbl.set("img_size", wrap(lua, img_size, "gfx.img_size", &["string"])?)?;
+                    gfx_tbl.set("has_img", wrap(lua, has_img, "gfx.has_img", &["string"])?)?;
                     gfx_tbl.set("clear", wrap(lua, clear, "gfx.clear", &["number"])?)?;
                     gfx_tbl.set(
                         "text",

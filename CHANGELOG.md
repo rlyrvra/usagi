@@ -7,6 +7,22 @@ dev-facing changes, not those related to developing the engine itself.
 
 No unreleased changes yet.
 
+## v1.4.0-zeafy - November 6, 2026
+
+Features:
+Multiple Sprite Sheet support (follows the gfx.spr_* signature closely):
+- `gfx.img(name, x, y, alpha)`
+- `gfx.img_ex(name, x, y, flip_x, flip_y, rotation, tint, alpha)`
+- `gfx.img_sspr(name, sx, sy, sw, sh, dx, dy, alpha)`
+- `gfx.img_sspr_ex(name, sx, sy, sw, sh, dx, dy, dw, dh, flip_x, flip_y, rotation, tint, alpha)`
+- `gfx.img_size(name)`
+- `gfx.has_img(name)`
+
+LuaJIT compilation support:
+- [DEVELOPING.md](DEVELOPING.md#dependencies)
+
+-`$env:USAGI_TEMPLATE_VERSION = "1.3.3"` - for export releases
+
 ## v1.3.3 - September 22, 2026
 
 Features:

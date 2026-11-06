@@ -38,33 +38,34 @@ pub fn load_script(lua: &Lua, vfs: &dyn VirtualFs) -> LuaResult<()> {
 /// is preserved; only the script is re-exec'd).
 pub fn install_require(lua: &Lua, vfs: Rc<dyn VirtualFs>) -> LuaResult<()> {
     let package: LuaTable = lua.globals().get("package")?;
-    let stock_searchers: LuaTable = package.get("searchers")?;
-    // searchers[1] is the preload searcher in every Lua 5.2+ build.
+
+    // Lua 5.2+ exposes `package.searchers`; LuaJIT (5.1-based) exposes
+    // `package.loaders`. Either key may be absent depending on backend,
+    // so probe both with `raw_get::<Option<_>>` — which returns Ok(None)
+    // for nil instead of erroring — and fall through to whichever exists.
+    let stock_searchers: LuaTable = if let Some(t) =
+        package.raw_get::<Option<LuaTable>>("searchers")?
+    {
+        t
+    } else if let Some(t) = package.raw_get::<Option<LuaTable>>("loaders")? {
+        t
+    } else {
+        return Err(LuaError::RuntimeError(
+            "install_require: package has neither 'searchers' nor 'loaders'".into(),
+        ));
+    };
+
+    // searchers[1] is the preload searcher on every backend (5.1
+    // through 5.5), so this stays the same regardless of which key we
+    // read from above.
     let preload_searcher: LuaValue = stock_searchers.get(1)?;
 
     let vfs_for_searcher = vfs.clone();
     let searcher =
         lua.create_function(move |lua, name: LuaString| -> LuaResult<LuaMultiValue> {
-            // `LuaString` not `String`: a non-UTF-8 module name (rare but
-            // possible) must not error at the FFI boundary, since that path
-            // crashes on Windows MSVC (see the loader-via-thunk note below).
             let name = name.to_string_lossy();
             match vfs_for_searcher.read_module(&name) {
                 Some((bytes, chunk_name)) => {
-                    // Preprocess and compile here, in the searcher, rather than
-                    // wrapping the load in a Rust loader callback. The loader
-                    // returned to `require` is then a precompiled Lua function
-                    // (or a tiny Lua thunk that calls `error(...)` if compile
-                    // failed), never a Rust closure.
-                    //
-                    // Why: Lua reports errors via `lua_error`, which longjmps to
-                    // the nearest `lua_pcall`. When the loader is a Rust callback
-                    // and it returns `Err`, mlua re-raises via `lua_error`, and
-                    // the longjmp has to unwind across Rust frames. On Windows
-                    // MSVC that trips the GS stack-cookie check and aborts the
-                    // process with STATUS_STACK_BUFFER_OVERRUN. Keeping the loader
-                    // Lua-only confines the longjmp to Lua/C frames back to the
-                    // require pcall which is fine on every platform.
                     let prepared = preprocess(&bytes);
                     let loader: LuaFunction = match lua
                         .load(prepared.as_slice())
@@ -73,9 +74,6 @@ pub fn install_require(lua: &Lua, vfs: Rc<dyn VirtualFs>) -> LuaResult<()> {
                     {
                         Ok(f) => f,
                         Err(e) => {
-                            // Build a Lua closure that throws when called. error()
-                            // is a Lua builtin, so its longjmp originates inside
-                            // Lua's C, which means no Rust frames to unwind through.
                             let msg = format!("error loading module '{name}':\n  {e}");
                             let msg_str = lua.create_string(&msg)?;
                             lua.load("local msg = ...; return function() error(msg, 0) end")
@@ -96,10 +94,18 @@ pub fn install_require(lua: &Lua, vfs: Rc<dyn VirtualFs>) -> LuaResult<()> {
                 }
             }
         })?;
+
     let new_searchers = lua.create_table()?;
     new_searchers.raw_push(preload_searcher)?;
     new_searchers.raw_push(searcher)?;
-    package.set("searchers", new_searchers)?;
+
+    // Set BOTH keys to the same table. Lua 5.2+ reads `searchers`,
+    // LuaJIT reads `loaders`. If the backend set them up as aliases,
+    // setting both keeps them in sync; if only one existed, this
+    // creates the other. Either way `require` finds our searcher on
+    // every backend.
+    package.set("searchers", new_searchers.clone())?;
+    package.set("loaders", new_searchers)?;
 
     Ok(())
 }
@@ -226,6 +232,111 @@ impl SpriteSheet {
 
     pub fn pixels(&self) -> Option<&crate::pixels::Pixels> {
         self.pixels.as_ref()
+    }
+}
+
+/// One named individual sprite loaded from `sprites/<name>.png`. Unlike
+/// `SpriteSheet`'s fixed grid, each asset here has its own native
+/// dimensions.
+pub struct SpriteAsset {
+    pub texture: Texture2D,
+    pub pixels: crate::pixels::Pixels,
+}
+
+impl SpriteAsset {
+    pub fn width(&self) -> i32 {
+        self.texture.width
+    }
+    pub fn height(&self) -> i32 {
+        self.texture.height
+    }
+}
+
+/// Named collection of individual sprite files. Rebuilds incrementally
+/// on hot reload so editing one `.png` doesn't reload every texture.
+pub struct SpriteLibrary {
+    sprites: HashMap<String, SpriteAsset>,
+    manifest: HashMap<String, SystemTime>,
+}
+
+impl SpriteLibrary {
+    pub fn empty() -> Self {
+        Self {
+            sprites: HashMap::new(),
+            manifest: HashMap::new(),
+        }
+    }
+
+    pub fn load(rl: &mut RaylibHandle, thread: &RaylibThread, vfs: &dyn VirtualFs) -> Self {
+        let mut sprites = HashMap::new();
+        for stem in vfs.sprite_stems() {
+            if let Some(bytes) = vfs.read_sprite(&stem)
+                && let Some((texture, pixels)) = load_texture_and_pixels(rl, thread, &bytes)
+            {
+                sprites.insert(stem, SpriteAsset { texture, pixels });
+            }
+        }
+        Self {
+            sprites,
+            manifest: vfs.sprite_manifest(),
+        }
+    }
+
+    /// Hot reload: only rebuilds sprites whose file mtime changed.
+    /// Removes sprites whose files were deleted.
+    pub fn reload_if_changed(
+        &mut self,
+        rl: &mut RaylibHandle,
+        thread: &RaylibThread,
+        vfs: &dyn VirtualFs,
+    ) -> bool {
+        let new_manifest = vfs.sprite_manifest();
+        if new_manifest == self.manifest {
+            return false;
+        }
+        // Drop sprites that no longer exist.
+        self.sprites.retain(|stem, _| new_manifest.contains_key(stem));
+        // Reload added or changed sprites.
+        for (stem, new_mtime) in &new_manifest {
+            let should_load = match self.manifest.get(stem) {
+                Some(old_mtime) if old_mtime == new_mtime => false,
+                _ => true,
+            };
+            if !should_load {
+                continue;
+            }
+            match vfs
+                .read_sprite(stem)
+                .and_then(|bytes| load_texture_and_pixels(rl, thread, &bytes))
+            {
+                Some((texture, pixels)) => {
+                    self.sprites.insert(stem.clone(), SpriteAsset { texture, pixels });
+                }
+                None => {
+                    self.sprites.remove(stem);
+                }
+            }
+        }
+        self.manifest = new_manifest;
+        true
+    }
+
+    pub fn get(&self, name: &str) -> Option<&SpriteAsset> {
+        self.sprites.get(name)
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.sprites.contains_key(name)
+    }
+
+    pub fn len(&self) -> usize {
+        self.sprites.len()
+    }
+
+    pub fn sorted_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.sprites.keys().cloned().collect();
+        names.sort();
+        names
     }
 }
 

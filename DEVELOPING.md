@@ -64,6 +64,23 @@ The canonical reference for the Windows setup is the
 `Install Windows zlib for freetype-sys` step in
 [ci.yml](https://github.com/brettchalupa/usagi/blob/main/.github/workflows/ci.yml).
 
+### Compiling in LuaJIT
+
+-- Cargo.toml
+```toml
+mlua = { version = "0.11", features = ["luajit", "vendored", "serde"] }
+
+[features]
+gles = ["sola-raylib/opengl_es_20"]
+luajit = []
+```
+-- config.toml
+```toml
+[target.x86_64-pc-windows-msvc.freetype]
+rustc-link-search = ["C:\\freetype-prebuilt\\x86_64"]
+rustc-link-lib = ["freetype"]
+```
+
 ### Linux with apt (elementary OS, Ubuntu)
 
 Here are the various dependencies needed to be installed to compile Usagi on

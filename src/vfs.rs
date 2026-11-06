@@ -15,6 +15,9 @@ pub trait VirtualFs {
 
     fn read_sprites(&self) -> Option<Vec<u8>>;
     fn sprites_mtime(&self) -> Option<SystemTime>;
+    fn sprite_stems(&self) -> Vec<String>;
+    fn read_sprite(&self, stem: &str) -> Option<Vec<u8>>;
+    fn sprite_manifest(&self) -> HashMap<String, SystemTime>;
 
     /// Optional `palette.png` at project root (or bundled). When
     /// present, overrides the default Pico-8 palette. Format: exactly
@@ -349,6 +352,10 @@ impl FsBacked {
         self.root.join("sprites.png")
     }
 
+    fn sprites_dir(&self) -> PathBuf {
+        self.root.join("sprites")
+    }
+
     fn palette_path(&self) -> PathBuf {
         self.root.join("palette.png")
     }
@@ -385,6 +392,50 @@ impl VirtualFs for FsBacked {
         std::fs::metadata(self.sprites_path())
             .and_then(|m| m.modified())
             .ok()
+    }
+
+    fn sprite_stems(&self) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(self.sprites_dir()) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|e| {
+                let p = e.path();
+                if p.extension().and_then(|s| s.to_str()) != Some("png") {
+                    return None;
+                }
+                p.file_stem().and_then(|s| s.to_str()).map(String::from)
+            })
+            .collect()
+    }
+
+    fn read_sprite(&self, stem: &str) -> Option<Vec<u8>> {
+        if stem.is_empty() || stem.contains('/') || stem.contains('\\') || stem.contains("..") {
+            return None;
+        }
+        std::fs::read(self.sprites_dir().join(format!("{stem}.png"))).ok()
+    }
+
+    fn sprite_manifest(&self) -> HashMap<String, SystemTime> {
+        let Ok(entries) = std::fs::read_dir(self.sprites_dir()) else {
+            return HashMap::new();
+        };
+        let mut out = HashMap::new();
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("png") {
+                continue;
+            }
+            let Some(stem) = p.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {
+                continue;
+            };
+            out.insert(stem.to_string(), mtime);
+        }
+        out
     }
 
     fn read_palette(&self) -> Option<Vec<u8>> {
@@ -616,6 +667,30 @@ impl VirtualFs for BundleBacked {
 
     fn sprites_mtime(&self) -> Option<SystemTime> {
         None
+    }
+
+    fn sprite_stems(&self) -> Vec<String> {
+        self.bundle
+            .names()
+            .filter_map(|name| {
+                name.strip_prefix("sprites/")
+                    .and_then(|f| f.strip_suffix(".png"))
+                    .map(String::from)
+            })
+            .collect()
+    }
+
+    fn read_sprite(&self, stem: &str) -> Option<Vec<u8>> {
+        if stem.is_empty() || stem.contains('/') || stem.contains('\\') || stem.contains("..") {
+            return None;
+        }
+        self.bundle
+            .get(&format!("sprites/{stem}.png"))
+            .map(<[u8]>::to_vec)
+    }
+
+    fn sprite_manifest(&self) -> HashMap<String, SystemTime> {
+        HashMap::new()
     }
 
     fn read_palette(&self) -> Option<Vec<u8>> {

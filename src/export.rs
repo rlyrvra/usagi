@@ -260,7 +260,7 @@ fn export_one_target(
     let runtime_dir = templates::ensure_cached(
         &cache_root,
         &base,
-        env!("CARGO_PKG_VERSION"),
+        &templates::template_version(),
         target,
         opts.no_cache,
     )?;

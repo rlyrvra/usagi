@@ -152,6 +152,45 @@ function gfx.tri(x1, y1, x2, y2, x3, y3, color, alpha) end
 ---@param alpha? number   opacity in `0..1`; omit or `1.0` for opaque
 function gfx.tri_fill(x1, y1, x2, y2, x3, y3, color, alpha) end
 
+--- Draw an individual sprite from `sprites/<name>.png` at its native
+--- size. Missing names silently no-op (matches `gfx.spr`).
+--- @param name string
+--- @param x number
+--- @param y number
+--- @param alpha? number 0..1, defaults to 1
+function gfx.img(name, x, y, alpha) end
+
+--- Draw an individual sprite with flip / rotate / tint. Rotation
+--- pivots around the image's center. `tint` is a palette index;
+--- pass `gfx.COLOR_TRUE_WHITE` for the identity tint.
+--- @param name string
+--- @param x number
+--- @param y number
+--- @param flip_x boolean
+--- @param flip_y boolean
+--- @param rotation number radians
+--- @param tint number palette index
+--- @param alpha number 0..1
+function gfx.img_ex(name, x, y, flip_x, flip_y, rotation, tint, alpha) end
+
+--- Draw a source rect of an individual sprite at 1:1 dest scale.
+function gfx.img_sspr(name, sx, sy, sw, sh, dx, dy, alpha) end
+
+--- Draw a source rect of an individual sprite with full control.
+function gfx.img_sspr_ex(name, sx, sy, sw, sh, dx, dy, dw, dh, flip_x, flip_y, rotation, tint, alpha) end
+
+--- Query an individual sprite's native dimensions. Returns (nil, nil)
+--- if the name is not present.
+--- @param name string
+--- @return number|nil w
+--- @return number|nil h
+function gfx.img_size(name) end
+
+--- True if `sprites/<name>.png` exists.
+--- @param name string
+--- @return boolean
+function gfx.has_img(name) end
+
 ---Sets a single pixel.
 ---@param x     number  x in game-space pixels
 ---@param y     number  y in game-space pixels

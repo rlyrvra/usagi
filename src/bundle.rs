@@ -392,6 +392,19 @@ mod tests {
             Some(b"function _init() end".as_slice())
         );
         assert_eq!(bundle.get("sprites.png"), Some(b"fake png".as_slice()));
+        let sprites_dir = root.join("sprites");
+        if sprites_dir.is_dir() {
+            for entry in std::fs::read_dir(&sprites_dir)?.flatten() {
+                let p = entry.path();
+                if p.extension().and_then(|e| e.to_str()) != Some("png") {
+                    continue;
+                }
+                let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                bundle.insert(format!("sprites/{name}"), std::fs::read(&p)?);
+            }
+        }
         assert!(bundle.get("sfx/jump.wav").is_some());
         assert!(bundle.get("sfx/coin.wav").is_some());
         assert!(bundle.get("sfx/notes.txt").is_none());

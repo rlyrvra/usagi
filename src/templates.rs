@@ -923,3 +923,15 @@ mod tests {
         assert!(matches!(rt, Runtime::Native { .. }));
     }
 }
+
+
+/// Version string used for constructing template download URLs. Defaults
+/// to the engine's own `CARGO_PKG_VERSION` (matching release semantics
+/// for stock builds), but can be overridden with `USAGI_TEMPLATE_VERSION`
+/// so a dev build can consume templates from an older published release
+/// without lying about its own version (and without tripping the
+/// `usagi update` prerelease skip in `src/update.rs`).
+pub fn template_version() -> String {
+    std::env::var("USAGI_TEMPLATE_VERSION")
+        .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string())
+}
